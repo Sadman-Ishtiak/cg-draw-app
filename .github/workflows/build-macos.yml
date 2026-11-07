@@ -1,0 +1,67 @@
+# Build the macOS distribution on a GitHub-hosted arm64 runner and attach it
+# to a release. macOS is the only target the dev host cannot produce (no
+# apple rust target / osxcross / GCS emscripten access), so it builds here
+# where the native Emscripten toolchain can be fetched.
+name: build-macos
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing release tag to attach the artifact to"
+        required: true
+        default: "v0.1.0"
+
+jobs:
+  macos:
+    runs-on: macos-14 # arm64; the produced binary is aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup default stable
+
+      - name: Build release binary
+        run: cd src-tauri && cargo build --release
+
+      - name: Install native Emscripten + node (mirrors the bundled layout)
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk
+          ./emsdk/emsdk install latest node-24.19.0
+          ./emsdk/emsdk activate latest
+          # flat emsdk/ layout (upstream + node + .emscripten), same as package.sh
+          mkdir -p dist-mac/emsdk
+          cp -r emsdk/upstream dist-mac/emsdk/
+          cp -r emsdk/node dist-mac/emsdk/
+          cp emsdk/.emscripten dist-mac/emsdk/
+
+      - name: Stage + tar
+        run: |
+          mkdir -p dist-mac
+          cp src-tauri/target/release/cg-draw-app dist-mac/
+          cp -r shim examples ui dist-mac/
+          cat > dist-mac/run.sh <<'EOF'
+          #!/bin/bash
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          export CGD_EMSDK="$HERE/emsdk"
+          export CGD_SHIM="$HERE/shim"
+          export EM_CONFIG="$HERE/emsdk/.emscripten"
+          exec "$HERE/cg-draw-app" "$@"
+          EOF
+          chmod +x dist-mac/run.sh
+          cat > dist-mac/README.txt <<'EOF'
+          cg-draw-app — offline code editor + animated BGI canvas (macOS arm64).
+
+          Run: ./run.sh
+
+          Everything else — the C++ compiler (Emscripten), the graphics shim
+          and the sample programs — is bundled. No network access is needed
+          at run time. Uses the system WebKit (ships with macOS).
+          EOF
+          tar -C dist-mac -czf cg-draw-app-macos-arm64.tar.gz .
+          ls -lh cg-draw-app-macos-arm64.tar.gz
+
+      - name: Attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.tag }}" cg-draw-app-macos-arm64.tar.gz --clobber
