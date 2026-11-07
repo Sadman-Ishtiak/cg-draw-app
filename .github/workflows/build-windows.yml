@@ -33,8 +33,6 @@ jobs:
           git clone --depth 1 https://github.com/emscripten-core/emsdk
           ./emsdk/emsdk install latest
           ./emsdk/emsdk activate latest
-          toolchain_marker() { [ -f emsdk/upstream/emscripten/emcc ] || : > emsdk/upstream/emscripten/emcc; }
-          toolchain_marker
           curl -fsSL -o py.zip https://www.python.org/ftp/python/3.12.8/python-3.12.8-embed-amd64.zip
           mkdir -p emsdk/python
           /c/Windows/System32/tar.exe -xf py.zip -C emsdk/python
@@ -67,9 +65,13 @@ jobs:
           cat > reloc/hello.cpp <<'EOF'
           int main() { return 0; }
           EOF
+          # Same env the app sets (compile()): EM_CONFIG -> the bundled
+          # $CFGDIR-relative config, EM_CACHE inside the bundle.
           export EM_CONFIG="$PWD/reloc/emsdk/.emscripten"
           export EM_CACHE="$PWD/reloc/cache"
-          ./reloc/emsdk/python/python.exe ./reloc/emsdk/upstream/emscripten/emcc.py reloc/hello.cpp -o reloc/hello.js
+          # Same entry point emcc_command() prefers: native emcc.exe from the
+          # emsdk Windows release (standalone pyinstaller wrapper).
+          "$PWD/reloc/emsdk/upstream/emscripten/emcc.exe" reloc/hello.cpp -o reloc/hello.js
           test -f reloc/hello.js && test -f reloc/hello.wasm && echo SMOKE_OK
 
       - name: Stage + zip

@@ -82,15 +82,23 @@ fn project_root() -> Option<PathBuf> {
         .map(|p| p.to_path_buf())
 }
 
+// Any of the three entry points an Emscripten installation provides counts as
+// a toolchain: emcc (POSIX script), emcc.exe (native wrapper in emsdk's
+// Windows releases), emcc.py (drivable through a bundled python).
+fn emcc_present(emsdk: &Path) -> bool {
+    let e = emsdk.join("upstream/emscripten");
+    e.join("emcc").exists() || e.join("emcc.exe").exists() || e.join("emcc.py").exists()
+}
+
 fn toolchain_root() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("CGD_EMSDK") {
         let p = PathBuf::from(p);
-        if p.join("upstream/emscripten/emcc").exists() {
+        if emcc_present(&p) {
             return Some(p);
         }
     }
     for cand in [PathBuf::from("emsdk"), project_root()?.join("emsdk")] {
-        if cand.join("upstream/emscripten/emcc").exists() {
+        if emcc_present(&cand) {
             return Some(cand);
         }
     }
@@ -102,6 +110,10 @@ fn toolchain_root() -> Option<PathBuf> {
 // sh scripts cannot execute there and PATH-layouts differ per OS.
 fn emcc_command(emsdk: &Path) -> Command {
     if cfg!(windows) {
+        let exe = emsdk.join("upstream/emscripten/emcc.exe");
+        if exe.exists() {
+            return Command::new(exe);
+        }
         for rel in ["python/python.exe", "python/python3.exe"] {
             let py = emsdk.join(rel);
             if py.exists() {
@@ -853,7 +865,7 @@ mod tests {
         let shim = shim_dir().expect("CGD_SHIM must resolve");
         assert!(shim.join("graphics_shim.cpp").exists());
         let tc = toolchain_root().expect("CGD_EMSDK must resolve");
-        assert!(tc.join("upstream/emscripten/emcc").exists());
+        assert!(emcc_present(&tc), "emcc entry point must exist under {}", tc.display());
         std::env::remove_var("CGD_SHIM");
         std::env::remove_var("CGD_EMSDK");
     }
