@@ -807,6 +807,42 @@ mod tests {
         assert!(toolchain_root().is_some(), "emsdk must resolve");
     }
 
+    // Diagnostics only (no asserts): prints what every resolution helper sees,
+    // so a CI failure of the real tests shows the divergent exists() result.
+    #[test]
+    fn debug_resolution_trace() {
+        let exe = std::env::current_exe().unwrap();
+        eprintln!("debug: exe = {:?}", exe);
+        for (i, a) in exe.ancestors().enumerate() {
+            let has_shim = a.join("shim/graphics_shim.cpp").exists();
+            let has_emsdk = a.join("emsdk").is_dir();
+            eprintln!("debug: ancestor[{}] {:?} shim={} emsdk_dir={}", i, a, has_shim, has_emsdk);
+        }
+        match std::env::var("CGD_EMSDK") {
+            Ok(v) => eprintln!("debug: CGD_EMSDK={:?}", v),
+            Err(_) => eprintln!("debug: CGD_EMSDK unset"),
+        }
+        if let Some(root) = project_root() {
+            let e = root.join("emsdk");
+            eprintln!("debug: project_root = {:?}", root);
+            eprintln!("debug: root/emsdk is_dir = {}", e.is_dir());
+            eprintln!("debug: upstream is_dir = {}", e.join("upstream").is_dir());
+            eprintln!("debug: upstream/emscripten is_dir = {}", e.join("upstream/emscripten").is_dir());
+            eprintln!("debug: emcc exists = {}", e.join("upstream/emscripten/emcc").exists());
+            eprintln!("debug: emcc.bat exists = {}", e.join("upstream/emscripten/emcc.bat").exists());
+            eprintln!("debug: emcc.py exists = {}", e.join("upstream/emscripten/emcc.py").exists());
+            if let Ok(entries) = std::fs::read_dir(&e.join("upstream/emscripten")) {
+                let names: Vec<_> = entries
+                    .filter_map(|r| r.ok().map(|p| p.file_name().to_string_lossy().into_owned()))
+                    .filter(|n| n.starts_with("emcc") || n.contains("emcc"))
+                    .collect();
+                eprintln!("debug: emcc* files present = {:?}", names);
+            }
+        } else {
+            eprintln!("debug: project_root = None");
+        }
+    }
+
     // The packaged run.sh sets CGD_EMSDK/CGD_SHIM so the app works from the
     // extracted archive regardless of the current directory.
     #[test]
