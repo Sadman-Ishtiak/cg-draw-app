@@ -53,7 +53,8 @@ jobs:
         run: |
           cd src-tauri
           cargo build --release
-          cargo test --release
+          # --nocapture: the debug_resolution_trace probe only prints to stderr
+          cargo test --release -- --nocapture
 
       # Compile a hello-world from a *relocated copy* of the bundle: proves the
       # $CFGDIR-relative config + bundled python/node survive moving off the
