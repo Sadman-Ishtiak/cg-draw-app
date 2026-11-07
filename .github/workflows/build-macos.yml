@@ -14,20 +14,20 @@ on:
 
 jobs:
   macos:
-    runs-on: macos-14 # arm64; the produced binary is aarch64-apple-darwin
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         run: rustup default stable
 
-      - name: Build release binary
+      - name: Build release binary (native runner arch)
         run: cd src-tauri && cargo build --release
 
       - name: Install native Emscripten + node (mirrors the bundled layout)
         run: |
           git clone --depth 1 https://github.com/emscripten-core/emsdk
-          ./emsdk/emsdk install latest node-24.19.0
+          ./emsdk/emsdk install latest
           ./emsdk/emsdk activate latest
           # flat emsdk/ layout (upstream + node + .emscripten), same as package.sh
           mkdir -p dist-mac/emsdk
@@ -50,7 +50,7 @@ jobs:
           EOF
           chmod +x dist-mac/run.sh
           cat > dist-mac/README.txt <<'EOF'
-          cg-draw-app — offline code editor + animated BGI canvas (macOS arm64).
+          cg-draw-app — offline code editor + animated BGI canvas (macOS).
 
           Run: ./run.sh
 
@@ -58,10 +58,10 @@ jobs:
           and the sample programs — is bundled. No network access is needed
           at run time. Uses the system WebKit (ships with macOS).
           EOF
-          tar -C dist-mac -czf cg-draw-app-macos-arm64.tar.gz .
-          ls -lh cg-draw-app-macos-arm64.tar.gz
+          tar -C dist-mac -czf "cg-draw-app-macos-$(uname -m).tar.gz" .
+          ls -lh "cg-draw-app-macos-$(uname -m).tar.gz"
 
       - name: Attach to release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ inputs.tag }}" cg-draw-app-macos-arm64.tar.gz --clobber
+        run: gh release upload "${{ inputs.tag }}" "cg-draw-app-macos-$(uname -m).tar.gz" --clobber
