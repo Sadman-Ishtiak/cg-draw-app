@@ -21,8 +21,11 @@
     <button id="btn-open">Open</button>
     <button id="btn-save">Save</button>
     <button id="btn-save-all" title="Save every tab as its own plain file in one folder">Save all</button>
-    <!-- release build: exam start button hidden; the exam subsystem is still
-         reachable on restart via exam_status, or by re-adding this button -->
+    <span class="sep"></span>
+    <button id="btn-exam" title="Start an exam session (requires an exam config file)">Start exam</button>
+    <button id="btn-exam-cfg" title="Author an exam config file from the active tab (starter code)">Exam cfg</button>
+    <button id="btn-grade" title="Open a .cgex1 exam save with the instructor passphrase (no time gate)">Decrypt</button>
+    <button id="btn-batch" title="Decrypt every .cgex1 in a folder into subfolders + decrypt-log.txt">Batch decrypt</button>
     <span class="spacer"></span>
     <span id="status">ready</span>
   </div>

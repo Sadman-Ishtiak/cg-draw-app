@@ -233,6 +233,9 @@ async function runActive() {
     ui.status(res.cached ? 'running (cached build)' : 'running');
     const jsText = new TextDecoder().decode(b64bytes(res.js));
     player.start(jsText, b64bytes(res.wasm));
+    // exam mode: snapshot right after a successful run too — a power cut
+    // right after working code should not cost up to a full autosave interval
+    if (examMode) autosaveAll();
   } catch (e) {
     ui.log('compile error: ' + ((e && e.message) || e), 'err');
     ui.status('compile failed');
@@ -337,6 +340,7 @@ async function autosaveAll() {
 
 let examMode = null;   // exam config while a session is active
 let examEnded = false;
+let examLesson = null; // authored exam config file, loaded for the next Start
 
 function allFiles() {
   return tabs.map((t) => [t.name, t.doc.getValue()]);
@@ -345,6 +349,20 @@ function allFiles() {
 function blockEv(e) {
   e.preventDefault();
   e.stopPropagation();
+}
+
+// Middle-click paste (X11 primary selection) and clipboard-engineered input
+// events slip past keydown blocks; kill them at the document capture level.
+function blockMiddle(e) {
+  if (e.button === 1) blockEv(e);
+}
+
+function examInputBlock(e) {
+  if (!examMode) return;
+  if (e.inputType === 'insertFromPaste' || e.inputType === 'insertFromDrop') {
+    e.preventDefault();
+    e.stopPropagation();
+  }
 }
 
 function examKeyBlock(e) {
@@ -358,20 +376,17 @@ function examKeyBlock(e) {
 
 function applyLockdown(on) {
   const ed = editor.getWrapperElement();
-  if (on) {
-    ed.addEventListener('copy', blockEv, true);
-    ed.addEventListener('cut', blockEv, true);
-    ed.addEventListener('paste', blockEv, true);
-    document.addEventListener('contextmenu', blockEv, true);
-    document.addEventListener('dragstart', blockEv, true);
-    document.addEventListener('keydown', examKeyBlock, true);
-  } else {
-    ed.removeEventListener('copy', blockEv, true);
-    ed.removeEventListener('cut', blockEv, true);
-    ed.removeEventListener('paste', blockEv, true);
-    document.removeEventListener('contextmenu', blockEv, true);
-    document.removeEventListener('dragstart', blockEv, true);
-    document.removeEventListener('keydown', examKeyBlock, true);
+  const doc = document;
+  const fns = [
+    [ed, 'copy', blockEv], [ed, 'cut', blockEv], [ed, 'paste', blockEv],
+    [doc, 'contextmenu', blockEv], [doc, 'dragstart', blockEv],
+    [doc, 'drop', blockEv], [doc, 'dragover', blockEv],
+    [doc, 'paste', blockEv], [doc, 'auxclick', blockMiddle],
+    [doc, 'beforeinput', examInputBlock], [doc, 'keydown', examKeyBlock],
+  ];
+  for (const [t, ev, fn] of fns) {
+    if (on) t.addEventListener(ev, fn, true);
+    else t.removeEventListener(ev, fn, true);
   }
 }
 
@@ -381,14 +396,19 @@ function enterExamMode(cfg) {
   document.body.classList.add('exam');
   document.getElementById('exam-banner').hidden = false;
   document.getElementById('exam-name').textContent = 'EXAM: ' + cfg.exam_name;
-  const examBtn = document.getElementById('btn-exam'); // absent in release build
+  const examBtn = document.getElementById('btn-exam');
   if (examBtn) examBtn.disabled = true;
   document.getElementById('btn-open').textContent = 'Open save';
-  // plan §7: no PNG export, no examples in exam mode
+  // plan §7: no PNG export, no examples in exam mode; teacher tools stay in
+  // normal mode only
   document.getElementById('btn-png').disabled = true;
   document.getElementById('btn-examples').disabled = true;
   document.getElementById('btn-grid').disabled = true;
   document.getElementById('btn-save-all').disabled = true;
+  document.getElementById('btn-exam-cfg').disabled = true;
+  document.getElementById('btn-grade').disabled = true;
+  document.getElementById('btn-batch').disabled = true;
+  document.getElementById('exam-timer').textContent = ''; // hidden clock
   applyLockdown(true);
   // filename convention (plan feature 14): seed a conventionally-named tab
   if (cfg.filename_convention && !tabs.some((t) => t.name === cfg.filename_convention)) {
@@ -405,13 +425,16 @@ function exitExamMode() {
   examEnded = false;
   document.body.classList.remove('exam');
   document.getElementById('exam-banner').hidden = true;
-  const examBtn2 = document.getElementById('btn-exam'); // absent in release build
+  const examBtn2 = document.getElementById('btn-exam');
   if (examBtn2) examBtn2.disabled = false;
   document.getElementById('btn-open').textContent = 'Open';
   document.getElementById('btn-png').disabled = false;
   document.getElementById('btn-examples').disabled = false;
   document.getElementById('btn-grid').disabled = false;
   document.getElementById('btn-save-all').disabled = false;
+  document.getElementById('btn-exam-cfg').disabled = false;
+  document.getElementById('btn-grade').disabled = false;
+  document.getElementById('btn-batch').disabled = false;
   editor.setOption('readOnly', false);
   document.getElementById('btn-run').disabled = false;
   document.getElementById('btn-save').disabled = false;
@@ -422,22 +445,20 @@ function exitExamMode() {
 }
 
 function tickExam() {
+  // The exam clock is hidden: no countdown is ever rendered. When the backend
+  // duration elapses, the saved code is deleted (backend sweep on the next
+  // exam touchpoint); here we lock the UI in place immediately.
   const end = examMode.started_at + examMode.duration_mins * 60;
-  const left = Math.floor(end - Date.now() / 1000);
-  const el = document.getElementById('exam-timer');
-  if (left <= 0) {
-    el.textContent = 'EXAM ENDED';
+  if (Date.now() / 1000 >= end) {
     examEnded = true;
     editor.setOption('readOnly', true);
     document.getElementById('btn-run').disabled = true;
     document.getElementById('btn-save').disabled = true;
     document.getElementById('btn-new').disabled = true;
     clearInterval(examMode.timerIv);
-  } else {
-    const h = Math.floor(left / 3600);
-    const m = Math.floor((left % 3600) / 60);
-    const s = left % 60;
-    el.textContent = 'time left ' + h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+    invoke('end_exam').catch(() => {}); // deletes exam_config + autosave
+    ui.status('exam time over');
+    return;
   }
 }
 
@@ -470,13 +491,26 @@ async function openExamSave() {
 }
 
 async function startExamFlow() {
+  // plan P1 gate: an exam session starts only from an authored exam config
+  // file — the form below is pre-filled from it (name, duration, convention).
+  let lesson = examLesson;
+  if (!lesson) {
+    try {
+      const cfg = await invoke('open_exam_config');
+      if (!cfg) return;
+      examLesson = cfg;
+      lesson = cfg;
+    } catch (e) {
+      return modalMessage('Exam config error', (e && e.message) || String(e));
+    }
+  }
   modalForm(
     'Start exam',
     [
-      { key: 'name', label: 'Exam name', value: 'Midterm' },
-      { key: 'mins', label: 'Duration (minutes)', value: '360' },
-      { key: 'pass', label: 'Student passphrase (fresh per exam, min 4 chars)', type: 'password' },
-      { key: 'ipass', label: 'Instructor passphrase (for grading, min 4 chars)', type: 'password' },
+      { key: 'name', label: 'Exam name', value: lesson.exam_name || 'Exam' },
+      { key: 'mins', label: 'Duration (minutes)', value: lesson.duration_mins || 360 },
+      { key: 'pass', label: 'Student passphrase (fresh per exam, min 8 chars)', type: 'password' },
+      { key: 'ipass', label: 'Instructor passphrase (for grading, min 8 chars)', type: 'password' },
     ],
     async (v) => {
       try {
@@ -485,6 +519,7 @@ async function startExamFlow() {
           durationMins: parseInt(v.mins.value, 10) || 360,
           passphrase: v.pass.value,
           instructorPass: v.ipass.value,
+          lesson: examLesson,
         });
         const cfg = await invoke('exam_status');
         enterExamMode(cfg);
@@ -494,6 +529,84 @@ async function startExamFlow() {
         if (files) for (const [name, content] of files) addTab(name, content);
       } catch (e) {
         modalMessage('Exam start failed', (e && e.message) || String(e));
+      }
+    }
+  );
+}
+
+// Author an exam config file (normal mode): the active tab becomes the
+// starter code; duration/convention/aids are set here.
+function examConfigFlow() {
+  const starter = activeTabName() ? tabs[active].doc.getValue() : '';
+  modalForm(
+    'Exam config',
+    [
+      { key: 'name', label: 'Exam name', value: 'Midterm' },
+      { key: 'mins', label: 'Duration (minutes)', value: '360' },
+      { key: 'conv', label: 'Filename convention', value: 'exam.cpp' },
+      { key: 'reopen', label: 'Allow student reopen? yes/no', value: 'yes' },
+      { key: 'grid', label: 'Grid overlay allowed? yes/no', value: 'yes' },
+      { key: 'toolbar', label: 'Insert toolbar allowed? yes/no', value: 'yes' },
+    ],
+    async (v) => {
+      const cfg = {
+        exam_name: v.name.value || 'Exam',
+        duration_mins: parseInt(v.mins.value, 10) || 360,
+        filename_convention: v.conv.value || 'exam.cpp',
+        starter,
+        reopen_allowed: v.reopen.value.trim().toLowerCase() !== 'no',
+        grid: v.grid.value.trim().toLowerCase() !== 'no',
+        insert_toolbar: v.toolbar.value.trim().toLowerCase() !== 'no',
+      };
+      try {
+        const path = await invoke('save_exam_config', { config: cfg });
+        if (path) {
+          examLesson = cfg;
+          ui.status('exam config written: ' + path);
+        }
+      } catch (e) {
+        ui.log('exam config failed: ' + ((e && e.message) || e), 'err');
+      }
+    }
+  );
+}
+
+// Teacher live-check during the exam: open one .cgex1 with the instructor
+// passphrase (no time gate) as a read-only view project in normal mode.
+async function decryptProjectFlow() {
+  try {
+    const path = await invoke('pick_cgex1_path');
+    if (!path) return;
+    modalForm(
+      'Decrypt exam save',
+      [{ key: 'ipass', label: 'Instructor passphrase', type: 'password' }],
+      async (v) => {
+        try {
+          const files = await invoke('open_exam_instructor', { passphrase: v.ipass.value, path });
+          tabs.length = 0;
+          files.forEach(([name, content], i) => addTab(name, content, i === 0));
+          ui.status('decrypted ' + files.length + ' file(s) from ' + path);
+        } catch (e) {
+          modalMessage('Decrypt failed', (e && e.message) || String(e));
+        }
+      }
+    );
+  } catch (e) {
+    ui.log('decrypt failed: ' + ((e && e.message) || e), 'err');
+  }
+}
+
+// Batch grading: decrypt every .cgex1 in a folder into subfolders + report.
+async function batchDecryptFlow() {
+  modalForm(
+    'Batch decrypt',
+    [{ key: 'ipass', label: 'Instructor passphrase', type: 'password' }],
+    async (v) => {
+      try {
+        const rows = await invoke('grade_exams', { instructorPass: v.ipass.value });
+        if (rows) modalMessage('Batch decrypt report', rows.join('\n') + '\n\n(decrypt-log.txt written)');
+      } catch (e) {
+        modalMessage('Batch decrypt failed', (e && e.message) || String(e));
       }
     }
   );
@@ -688,9 +801,12 @@ document.getElementById('btn-new').onclick = () => {
 document.getElementById('btn-open').onclick = openFile;
 document.getElementById('btn-save').onclick = saveActive;
 document.getElementById('btn-save-all').onclick = saveAll;
-// release build: the start button is hidden; wire it up only when present so a
-// dev build (button re-added to index.html) still works.
+// exam tools (normal mode): start (config-gated), author config, teacher
+// decrypt + batch grading
 { const examBtn = document.getElementById('btn-exam'); if (examBtn) examBtn.onclick = startExamFlow; }
+document.getElementById('btn-exam-cfg').onclick = examConfigFlow;
+document.getElementById('btn-grade').onclick = decryptProjectFlow;
+document.getElementById('btn-batch').onclick = batchDecryptFlow;
 
 // Function-key shortcuts (plan §4): F9 = Run, F10 = speed toggle, F12 = Stop,
 // plus F5 = Run. Work in both normal and exam mode — including while the
@@ -750,4 +866,4 @@ initExam().then(() => {
   applyGridVisibility();
   if (!examMode) offerRecovery();
 });
-setInterval(autosaveAll, 60000);
+setInterval(autosaveAll, 30000); // 30 s: bounds power-loss loss to half a minute

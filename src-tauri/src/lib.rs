@@ -515,7 +515,7 @@ pub fn run() {
             save_exam_config, open_exam_config, list_examples, list_autosaves, load_autosave,
             clear_autosaves, start_exam, exam_status, end_exam, save_exam, autosave_exam,
             open_exam, open_exam_if_allowed, open_exam_autosave,
-            open_exam_instructor, pick_cgex1_path
+            open_exam_instructor, pick_cgex1_path, grade_exams
         ])
         .run(tauri::generate_context!())
         .expect("error while running cg-draw-app");
@@ -584,11 +584,11 @@ fn start_exam(
     instructor_pass: String,
     lesson: Option<serde_json::Value>,
 ) -> Result<(), String> {
-    if passphrase.len() < 4 {
-        return Err("student passphrase too short (min 4 chars)".into());
+    if passphrase.len() < 8 {
+        return Err("student passphrase too short (min 8 chars)".into());
     }
-    if instructor_pass.len() < 4 {
-        return Err("instructor passphrase too short (min 4 chars)".into());
+    if instructor_pass.len() < 8 {
+        return Err("instructor passphrase too short (min 8 chars)".into());
     }
     let instructor = exam::new_instructor_wrap(&instructor_pass);
     let l = lesson.unwrap_or_else(|| serde_json::json!({}));
@@ -611,9 +611,45 @@ fn start_exam(
 }
 
 // Frontend polls this on startup to re-enter exam mode after an app restart.
+// The exam clock is hidden from students: no countdown is displayed anywhere.
+// After `duration_mins` the session ends and the encrypted autosave is
+// deleted. Enforcement is backend-side — checked lazily at every exam
+// touchpoint (status poll, saves, reopen) so a tampered frontend cannot keep
+// an exam alive. Collected .cgex1 files the student saved manually are NOT
+// touched (the instructor decrypt path grades those anytime).
+fn exam_expired(cfg: &serde_json::Value, now: u64) -> bool {
+    let started = cfg["started_at"].as_u64().unwrap_or(0);
+    let mins = cfg["duration_mins"].as_u64().unwrap_or(0);
+    mins > 0 && now >= started.saturating_add(mins * 60)
+}
+
+// Deletes the exam session config and the encrypted autosave. Called when the
+// hidden clock runs out: the saved code is gone.
+fn end_exam_at(dir: &std::path::Path) {
+    let _ = fs::remove_file(dir.join("exam_config.json"));
+    let _ = fs::remove_file(dir.join("exam_autosave.cgex1"));
+}
+
+// Power-cut-safe file write: write to a temp name, then swap. A power loss
+// mid-write leaves the previous autosave intact instead of a truncated file.
+fn atomic_write(path: &std::path::Path, data: &[u8]) -> Result<(), String> {
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, data).map_err(|e| e.to_string())?;
+    // Windows rename refuses to overwrite an existing destination.
+    let _ = fs::remove_file(path);
+    fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn exam_status(app: tauri::AppHandle) -> Result<Option<serde_json::Value>, String> {
-    exam_session(&app).map(Some).or(Ok(None))
+    match exam_session(&app) {
+        Ok(cfg) if exam_expired(&cfg, exam::now_secs()) => {
+            let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+            end_exam_at(&dir);
+            Ok(None)
+        }
+        other => other.map(Some).or(Ok(None)),
+    }
 }
 
 #[tauri::command]
@@ -638,6 +674,11 @@ fn session_wrap(cfg: &serde_json::Value) -> Result<exam::InstructorWrap, String>
 #[tauri::command]
 fn save_exam(app: tauri::AppHandle, files: Vec<(String, String)>) -> Result<Option<String>, String> {
     let cfg = exam_session(&app)?;
+    if exam_expired(&cfg, exam::now_secs()) {
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        end_exam_at(&dir);
+        return Err("exam time is over".into());
+    }
     let passphrase = cfg["passphrase"].as_str().ok_or("corrupted exam config")?;
     let instructor = session_wrap(&cfg)?;
     let exam_name = cfg["exam_name"].as_str().unwrap_or("exam");
@@ -654,16 +695,22 @@ fn save_exam(app: tauri::AppHandle, files: Vec<(String, String)>) -> Result<Opti
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
-// Encrypted autosave for exam mode: fixed path, no dialog.
+// Encrypted autosave for exam mode: fixed path, no dialog. Written atomically
+// so a power cut mid-write cannot destroy the previous autosave.
 #[tauri::command]
 fn autosave_exam(app: tauri::AppHandle, files: Vec<(String, String)>) -> Result<(), String> {
     let cfg = exam_session(&app)?;
+    if exam_expired(&cfg, exam::now_secs()) {
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        end_exam_at(&dir);
+        return Err("exam time is over".into());
+    }
     let passphrase = cfg["passphrase"].as_str().ok_or("corrupted exam config")?;
     let instructor = session_wrap(&cfg)?;
     let data = exam::encrypt_exam(&files, passphrase, &instructor)?;
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    fs::write(dir.join("exam_autosave.cgex1"), data).map_err(|e| e.to_string())
+    atomic_write(&dir.join("exam_autosave.cgex1"), &data)
 }
 
 // Student reopen: passphrase required, 8 h window enforced; also callable when
@@ -686,7 +733,14 @@ fn open_exam(app: tauri::AppHandle, passphrase: String) -> Result<Option<Vec<(St
 #[tauri::command]
 fn open_exam_if_allowed(app: tauri::AppHandle, passphrase: String, path: String) -> Result<Vec<(String, String)>, String> {
     let allowed = match exam_session(&app) {
-        Ok(cfg) => cfg["reopen_allowed"] != false,
+        Ok(cfg) => {
+            if exam_expired(&cfg, exam::now_secs()) {
+                let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+                end_exam_at(&dir);
+                return Err("exam time is over".into());
+            }
+            cfg["reopen_allowed"] != false
+        }
         Err(_) => true, // no session: normal mode, reopening an old save is fine
     };
     if !allowed {
@@ -697,9 +751,16 @@ fn open_exam_if_allowed(app: tauri::AppHandle, passphrase: String, path: String)
 }
 
 // Restores the local encrypted autosave (e.g. after an app crash mid-exam).
+// Refuses (and cleans up) once the hidden exam clock has run out.
 #[tauri::command]
 fn open_exam_autosave(app: tauri::AppHandle, passphrase: String) -> Result<Option<Vec<(String, String)>>, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    if let Ok(cfg) = exam_session(&app) {
+        if exam_expired(&cfg, exam::now_secs()) {
+            end_exam_at(&dir);
+            return Ok(None);
+        }
+    }
     let bytes = match fs::read(dir.join("exam_autosave.cgex1")) {
         Ok(b) => b,
         Err(_) => return Ok(None),
@@ -726,6 +787,82 @@ fn pick_cgex1_path(app: tauri::AppHandle) -> Result<Option<String>, String> {
         .blocking_pick_file();
     let Some(path) = path else { return Ok(None) };
     Ok(Some(path.into_path().map_err(|e| e.to_string())?.to_string_lossy().into_owned()))
+}
+
+// One decrypted exam writes out to dest_dir/: every student file as plain
+// text. Pure (no dialogs) so tests can drive a whole folder.
+fn decrypt_exam_to_dir(
+    bytes: &[u8],
+    instructor_pass: &str,
+    dest_dir: &std::path::Path,
+) -> Result<usize, String> {
+    let files = exam::decrypt_exam(bytes, "", Some(instructor_pass), exam::now_secs())?;
+    fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
+    for (name, content) in &files {
+        fs::write(dest_dir.join(sanitize_name(name)), content).map_err(|e| e.to_string())?;
+    }
+    Ok(files.len())
+}
+
+// Batch grading: decrypt every *.cgex1 in `src_dir` with the instructor
+// passphrase into `src_dir/<save-name>/` and write a decrypt-log report.
+// The report holds nothing sensitive (file name, outcome, file count).
+fn batch_decrypt_in(
+    src_dir: &std::path::Path,
+    instructor_pass: &str,
+) -> Result<Option<Vec<String>>, String> {
+    let mut names: Vec<String> = match fs::read_dir(src_dir) {
+        Ok(entries) => entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension().and_then(|e| e.to_str()) == Some("cgex1")
+                    && p.file_name().map(|n| n != "exam_autosave.cgex1").unwrap_or(false)
+            })
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect(),
+        Err(_) => return Ok(None), // dialog cancelled or unusable dir
+    };
+    if names.is_empty() {
+        return Err("no .cgex1 files in the selected folder".into());
+    }
+    names.sort();
+    let mut rows = Vec::new();
+    for name in &names {
+        let bytes = fs::read(src_dir.join(name)).map_err(|e| format!("{}: {}", name, e))?;
+        let stem = name.trim_end_matches(".cgex1");
+        // folder name: strip unsafe chars but do NOT use sanitize_name (it
+        // appends ".cpp", which would turn the folder into a .cpp name)
+        let mut folder: String = stem
+            .chars()
+            .filter(|c| c.is_alphanumeric() || matches!(c, '_' | '-'))
+            .collect();
+        if folder.is_empty() {
+            folder = "unknown".into();
+        }
+        let dest = src_dir.join(&folder);
+        let row = match decrypt_exam_to_dir(&bytes, instructor_pass, &dest) {
+            Ok(n) => format!("{}, ok, {} files -> {}", name, n, dest.display()),
+            Err(e) => format!("{}, ERROR: {}", name, e),
+        };
+        rows.push(row);
+    }
+    let log = format!("decrypt-log -- {}\n{}\n", exam::now_secs(), rows.join("\n"));
+    fs::write(src_dir.join("decrypt-log.txt"), log).map_err(|e| e.to_string())?;
+    Ok(Some(rows))
+}
+
+// Instructor grading: pick a folder of .cgex1 saves, decrypt all with the
+// (never-stored) instructor passphrase. Returns per-file report rows.
+#[tauri::command]
+fn grade_exams(
+    app: tauri::AppHandle,
+    instructor_pass: String,
+) -> Result<Option<Vec<String>>, String> {
+    let Some(dir) = app.dialog().file().blocking_pick_folder() else {
+        return Ok(None);
+    };
+    batch_decrypt_in(&dir.into_path().map_err(|e| e.to_string())?, &instructor_pass)
 }
 
 // ---- acceptance D.1/D.6 helpers: compile through the real toolchain ----
@@ -941,6 +1078,93 @@ mod tests {
         assert!(exam::decrypt_exam(&autosave, "s-pass", None, now).is_err());
         let got = exam::decrypt_exam(&autosave, "", Some("teach-pass"), now).unwrap();
         assert_eq!(got, files);
+    }
+
+    // ---- hidden exam clock (objective): no countdown; expiry deletes the
+    // saved code and refuses further exam work ----
+
+    #[test]
+    fn hidden_clock_expiry_boundaries() {
+        let instructor = exam::new_instructor_wrap("t");
+        let mut cfg = build_exam_config(
+            "E", 360, "p", "aa", &instructor, 1000, &serde_json::json!({}),
+        );
+        // 359:59 into a 6 h exam: alive. Exactly at 6 h: expired.
+        assert!(!exam_expired(&cfg, 1000 + 359 * 60));
+        assert!(!exam_expired(&cfg, 1000 + 360 * 60 - 1));
+        assert!(exam_expired(&cfg, 1000 + 360 * 60));
+        // duration 0 (unset) never expires on its own
+        cfg["duration_mins"] = serde_json::json!(0);
+        assert!(!exam_expired(&cfg, 1000 + 100 * 24 * 3600));
+    }
+
+    #[test]
+    fn expiry_deletes_saved_code() {
+        let dir = std::env::temp_dir().join(format!("cgd-expiry-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("exam_config.json"), b"cfg").unwrap();
+        atomic_write(&dir.join("exam_autosave.cgex1"), b"saved-code").unwrap();
+        assert!(dir.join("exam_autosave.cgex1").exists());
+        end_exam_at(&dir);
+        assert!(!dir.join("exam_config.json").exists());
+        assert!(!dir.join("exam_autosave.cgex1").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Atomic autosave: content lands intact and no .tmp litter remains.
+    #[test]
+    fn atomic_write_survives_and_cleans_up() {
+        let dir = std::env::temp_dir().join(format!("cgd-atomic-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("autosave.cgex1");
+        atomic_write(&p, b"first").unwrap();
+        atomic_write(&p, b"second").unwrap();
+        assert_eq!(fs::read(&p).unwrap(), b"second");
+        assert!(!dir.join("autosave.tmp").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---- instructor grading loop: batch decrypt + report ----
+
+    #[test]
+    fn batch_decrypt_grades_folder_and_reports() {
+        let dir = std::env::temp_dir().join(format!("cgd-batch-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let instructor = exam::new_instructor_wrap("teach-pass");
+        let files = vec![
+            ("exam.cpp".to_string(), "int main() { return 1; }".to_string()),
+            ("helper.cpp".to_string(), "int h() { return 2; }".to_string()),
+        ];
+        fs::write(
+            dir.join("roll01.cgex1"),
+            exam::encrypt_exam(&files, "stud", &instructor).unwrap(),
+        )
+        .unwrap();
+        fs::write(dir.join("broken.cgex1"), b"CGEX1\ngarbage\n").unwrap();
+
+        let rows = batch_decrypt_in(&dir, "teach-pass").unwrap().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].starts_with("broken.cgex1, ERROR"));
+        assert!(rows[1].starts_with("roll01.cgex1, ok, 2 files"));
+        // student content decrypted into its own folder, plain files
+        assert_eq!(
+            fs::read_to_string(dir.join("roll01/exam.cpp")).unwrap(),
+            "int main() { return 1; }"
+        );
+        assert!(dir.join("roll01/helper.cpp").exists());
+        assert!(dir.join("decrypt-log.txt").exists());
+        // wrong instructor passphrase reports an error row, not a panic
+        let rows2 = batch_decrypt_in(&dir, "wrong-pass").unwrap().unwrap();
+        assert!(rows2.iter().all(|r| r.contains("ERROR")));
+
+        // the local exam autosave is never graded as a submission
+        fs::write(dir.join("exam_autosave.cgex1"), b"x").unwrap();
+        let rows3 = batch_decrypt_in(&dir, "teach-pass").unwrap().unwrap();
+        assert_eq!(rows3.len(), 2);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     // ---- normal-mode file tests (plan §5) --------------------------------

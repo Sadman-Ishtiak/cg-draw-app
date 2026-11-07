@@ -172,6 +172,24 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 body.exam { user-select: none; }
 body.exam #editor, body.exam .CodeMirror { user-select: text; }
 
+/* exam edition: red scheme — the window is unmistakably in exam mode */
+body.exam {
+  --accent: #e05555;
+  --border: #7d2b2b;
+}
+body.exam #toolbar {
+  background: #331414;
+  border-bottom: 2px solid #a03030;
+}
+body.exam #toolbar button {
+  border-color: #6b2525;
+}
+body.exam #toolbar button:hover:not(:disabled) { background: #4a1c1c; }
+body.exam #btn-run { color: #ffb0b0; }
+body.exam #status { color: #e08a8a; }
+body.exam #editor { border: 1px solid #a03030; }
+body.exam #console { border-top: 1px solid #7d2b2b; }
+
 #modal {
   position: fixed;
   inset: 0;
