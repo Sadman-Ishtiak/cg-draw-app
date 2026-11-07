@@ -1,0 +1,102 @@
+# Native Windows build: MSVC cg-draw-app.exe + a *native win64* Emscripten
+# toolchain + bundled portable python. Replaces the release zip that (necessarily,
+# on the Linux dev host) shipped the Linux-ELF toolchain, so student-code
+# compilation genuinely works on Windows.
+name: build-windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing release tag to attach the artifact to"
+        required: true
+        default: "v0.1.0"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write # needed to replace the release asset
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup default stable
+
+      # Win64 Emscripten + node from emsdk; python is bundled separately so the
+      # student machine needs nothing installed. The .emscripten config is
+      # written `$CFGDIR`-relative on purpose: the same file works from the
+      # repo (for cargo test) and from the relocated zip bundle.
+      - name: Install native Emscripten + node + portable python
+        shell: bash
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk
+          ./emsdk/emsdk install latest
+          ./emsdk/emsdk activate latest
+          toolchain_marker() { [ -f emsdk/upstream/emscripten/emcc ] || : > emsdk/upstream/emscripten/emcc; }
+          toolchain_marker
+          curl -fsSL -o py.zip https://www.python.org/ftp/python/3.12.8/python-3.12.8-embed-amd64.zip
+          mkdir -p emsdk/python
+          /c/Windows/System32/tar.exe -xf py.zip -C emsdk/python
+          NODEEXE=$(find emsdk/node -name node.exe | head -1 | sed 's|^emsdk/||')
+          echo "node: $NODEEXE"
+          cat > emsdk/.emscripten <<'EOF'
+          LLVM_ROOT = '$CFGDIR/upstream/bin'
+          BINARYEN_ROOT = '$CFGDIR/upstream'
+          EMSCRIPTEN_ROOT = '$CFGDIR/upstream/emscripten'
+          EOF
+          printf "NODE_JS = ['\$CFGDIR/%s']\n" "$NODEEXE" >> emsdk/.emscripten
+          cat emsdk/.emscripten
+
+      - name: Build + test (MSVC)
+        shell: bash
+        run: |
+          cd src-tauri
+          cargo build --release
+          cargo test --release
+
+      # Compile a hello-world from a *relocated copy* of the bundle: proves the
+      # $CFGDIR-relative config + bundled python/node survive moving off the
+      # install path (exactly what happens when a student extracts the zip).
+      - name: Relocation smoke test
+        shell: bash
+        run: |
+          mkdir -p reloc
+          cp -r emsdk reloc/emsdk
+          cat > reloc/hello.cpp <<'EOF'
+          int main() { return 0; }
+          EOF
+          export EM_CONFIG="$PWD/reloc/emsdk/.emscripten"
+          export EM_CACHE="$PWD/reloc/cache"
+          ./reloc/emsdk/python/python.exe ./reloc/emsdk/upstream/emscripten/emcc.py reloc/hello.cpp -o reloc/hello.js
+          test -f reloc/hello.js && test -f reloc/hello.wasm && echo SMOKE_OK
+
+      - name: Stage + zip
+        shell: bash
+        run: |
+          STAGE=cg-draw-app-windows-x86_64
+          mkdir -p "$STAGE/emsdk"
+          cp src-tauri/target/release/cg-draw-app.exe "$STAGE/"
+          cp windows/run.exe "$STAGE/"
+          cp -r shim examples ui "$STAGE/"
+          cp -r emsdk/upstream emsdk/node emsdk/python "$STAGE/emsdk/"
+          cp emsdk/.emscripten "$STAGE/emsdk/"
+          cat > "$STAGE/README.txt" <<'EOF'
+          CG Draw — offline code editor + animated BGI canvas for a CG course.
+
+          Run:      double-click run.exe (or cg-draw-app.exe)
+          Build:    unsigned. If SmartScreen warns: "More info" -> "Run anyway".
+
+          Fully self-contained: the C++ compiler (native Windows Emscripten),
+          node, python, the graphics shim and the sample programs are all
+          bundled. Requires the WebView2 runtime, which ships with current
+          Windows 10/11.
+          EOF
+          rm -rf "$STAGE/emsdk/emsdk-repo" 2>/dev/null || true
+          /c/Windows/System32/tar.exe -a -cf cg-draw-app-windows-x86_64.zip "$STAGE"
+          ls -lh cg-draw-app-windows-x86_64.zip
+
+      - name: Attach to release (replaces the Linux-toolchain zip)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.tag }}" cg-draw-app-windows-x86_64.zip --clobber

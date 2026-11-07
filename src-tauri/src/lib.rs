@@ -2,7 +2,7 @@ use base64::Engine as _;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
@@ -97,6 +97,27 @@ fn toolchain_root() -> Option<PathBuf> {
     None
 }
 
+// emcc is a POSIX sh script; on Windows we drive emcc.py through the bundled
+// portable python (emsdk/python/python.exe, staged by CI) or emcc.bat, because
+// sh scripts cannot execute there and PATH-layouts differ per OS.
+fn emcc_command(emsdk: &Path) -> Command {
+    if cfg!(windows) {
+        for rel in ["python/python.exe", "python/python3.exe"] {
+            let py = emsdk.join(rel);
+            if py.exists() {
+                let mut c = Command::new(py);
+                c.arg(emsdk.join("upstream/emscripten/emcc.py"));
+                return c;
+            }
+        }
+        let bat = emsdk.join("upstream/emscripten/emcc.bat");
+        if bat.exists() {
+            return Command::new(bat);
+        }
+    }
+    Command::new(emsdk.join("upstream/emscripten/emcc"))
+}
+
 fn shim_dir() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("CGD_SHIM") {
         let p = PathBuf::from(p);
@@ -163,14 +184,13 @@ fn compile(app: tauri::AppHandle, files: Vec<(String, String)>) -> Result<Compil
     }
 
     let emsdk = toolchain_root().ok_or_else(|| "emscripten toolchain not found".to_string())?;
-    let emcc = emsdk.join("upstream/emscripten/emcc");
 
     fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
     for (n, s) in &named {
         fs::write(cache.join(n), s).map_err(|e| e.to_string())?;
     }
 
-    let mut cmd = Command::new(&emcc);
+    let mut cmd = emcc_command(&emsdk);
     for (n, _) in &named {
         cmd.arg(cache.join(n));
     }
@@ -735,7 +755,7 @@ mod compile_harness {
     pub fn emcc_run(emsdk: &PathBuf, shim: &PathBuf, files: &[(String, String)], scratch: &PathBuf) -> EmccOut {
         let _ = fs::remove_dir_all(scratch);
         fs::create_dir_all(scratch).unwrap();
-        let mut cmd = Command::new(emsdk.join("upstream/emscripten/emcc"));
+        let mut cmd = emcc_command(emsdk);
         for (name, src) in files {
             let p = scratch.join(sanitize_name(name));
             fs::write(&p, src).unwrap();
