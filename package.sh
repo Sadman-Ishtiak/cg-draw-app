@@ -48,6 +48,11 @@ cp -r "$ROOT/emsdk/node" "$STAGE/emsdk/" 2>/dev/null || true
 # working from any install location.
 cp "$ROOT/emsdk/.emscripten" "$STAGE/emsdk/"
 
+echo "== bundling the GTK/WebKit runtime (cglibs) =="
+# Makes the tarball fully self-contained: no webkit2gtk/GTK3 packages needed
+# on the target machine — only glibc (libc/libm) remain system-level.
+"$ROOT/bundle-cglibs.sh" "$STAGE/cglibs"
+
 cat > "$STAGE/run.sh" <<'EOF'
 #!/bin/bash
 # Launch cg-draw-app. Sets CGD_EMSDK so the app finds the bundled toolchain,
@@ -57,6 +62,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 export CGD_EMSDK="$HERE/emsdk"
 export CGD_SHIM="$HERE/shim"
 export EM_CONFIG="$HERE/emsdk/.emscripten"
+# the whole GTK/WebKit runtime is bundled in cglibs/ (no system packages
+# needed beyond glibc); the launcher puts it first in the search path.
+export LD_LIBRARY_PATH="$HERE/cglibs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 exec "$HERE/cg-draw-app" "$@"
 EOF
 chmod +x "$STAGE/run.sh"
@@ -65,11 +73,10 @@ cat > "$STAGE/README.txt" <<'EOF'
 cg-draw-app — offline code editor + animated BGI canvas for a CG course.
 
 Run:      ./run.sh
-Requires: webkit2gtk-4.1 and GTK3 runtime libraries
-          (Debian/Ubuntu: libwebkit2gtk-4.1-0 libgtk-3-0)
 
-Everything else — the C++ compiler (Emscripten), the graphics shim and the
-sample programs — is bundled. No network access is needed at any point.
+Fully self-contained: the C++ compiler (Emscripten), the graphics shim, the
+sample programs AND the GTK/WebKit runtime are all bundled (see cglibs/).
+The only system requirement is glibc. No network access is needed at any point.
 
 Windows note: the Windows build is a single self-extracting .exe and needs the
 WebView2 runtime, which ships with current Windows 10/11. If SmartScreen warns

@@ -6,3 +6,6 @@
 *.wasm
 /out/
 /AppDir/
+/cglibs/
+/AppDir/
+/squashfs-root/
