@@ -1,0 +1,241 @@
+:root {
+  --bg: #1e1f22;
+  --panel: #26282c;
+  --border: #3a3d42;
+  --fg: #d6d8dc;
+  --accent: #4f9cf9;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, sans-serif;
+  font-size: 13px;
+}
+
+body { display: flex; flex-direction: column; overflow: hidden; }
+
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+#toolbar button {
+  background: #33363b;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+#toolbar button:hover:not(:disabled) { background: #3d4046; }
+#toolbar button:disabled { opacity: 0.45; cursor: default; }
+#btn-run { color: #7dd97d; }
+#btn-stop { color: #ef7d7d; }
+#btn-grid.on, #btn-png.on { background: #2f4b6e; border-color: #4f9cf9; }
+
+.sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+.spacer { flex: 1; }
+#status { color: #9aa0a8; }
+
+#main { flex: 1; display: flex; min-height: 0; }
+
+#left {
+  flex: 0 0 50%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+#splitter {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: var(--border);
+}
+#splitter:hover { background: var(--accent); }
+
+#tabs {
+  display: flex;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex: none;
+}
+
+.tab {
+  padding: 5px 10px;
+  cursor: pointer;
+  border-right: 1px solid var(--border);
+  white-space: nowrap;
+  color: #9aa0a8;
+  user-select: none;
+}
+
+.tab.active { background: var(--bg); color: var(--fg); }
+.tab.dirty::after { content: " \2022"; color: var(--accent); }
+.tab .close { margin-left: 8px; color: #777; }
+.tab .close:hover { color: #fff; }
+
+#editor { flex: 1; min-height: 0; }
+.CodeMirror {
+  height: 100%;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 13px;
+}
+
+#right {
+  flex: 0 0 50%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+#canvas-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  background: #141517;
+  min-height: 0;
+}
+
+#screen {
+  background: #000;
+  image-rendering: pixelated;
+  outline: none;
+  border: 1px solid var(--border);
+  cursor: crosshair;
+}
+
+#readout {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 8px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  flex: none;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: #9aa0a8;
+}
+
+#console {
+  height: 180px;
+  overflow-y: auto;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  padding: 4px 8px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  flex: none;
+}
+
+#console .out { color: #b8bcc4; }
+#console .err { color: #ef7d7d; }
+#console .sys { color: #7da9ef; }
+#console .err-line { color: #ef7d7d; }
+#console .warn-line { color: #d9b44a; }
+#console .clickable { cursor: pointer; text-decoration: underline; }
+
+#exam-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 4px 12px;
+  background: #5c1a1a;
+  color: #ffd9d9;
+  border-bottom: 1px solid #7d2b2b;
+  font-weight: 600;
+  flex: none;
+}
+
+#exam-banner[hidden] { display: none; }
+#exam-timer { font-family: ui-monospace, monospace; }
+#btn-exam-end { margin-left: auto; }
+
+/* plan §7: in exam mode only typed keyboard input is allowed, so text
+   selection (console output, readout) is disabled everywhere. */
+body.exam { user-select: none; }
+body.exam #editor, body.exam .CodeMirror { user-select: text; }
+
+#modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+#modal[hidden] { display: none; }
+
+#modal-box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px 20px;
+  min-width: 340px;
+  max-width: 480px;
+}
+
+#modal-box h3 { margin: 0 0 12px; }
+#modal-body label { display: block; margin: 8px 0 2px; color: #9aa0a8; }
+#modal-body input {
+  width: 100%;
+  padding: 5px 8px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+}
+#modal-body .msg { color: #d9b44a; margin-top: 8px; white-space: pre-wrap; }
+#modal-body select {
+  width: 100%;
+  padding: 5px 8px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+/* signature tooltip under the cursor (plan feature 4) */
+.cg-sig-tip {
+  position: absolute;
+  z-index: 20;
+  max-width: 420px;
+  background: #14213a;
+  color: #cfe0ff;
+  border: 1px solid #4f9cf9;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+#modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+#modal-actions button {
+  background: #33363b;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 14px;
+  cursor: pointer;
+}

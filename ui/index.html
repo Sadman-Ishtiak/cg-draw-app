@@ -1,0 +1,64 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>CG Draw</title>
+  <link rel="stylesheet" href="vendor/codemirror.min.css" />
+  <link rel="stylesheet" href="vendor/show-hint.min.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="toolbar">
+    <button id="btn-run" title="Compile and run (F5)">&#9654; Run</button>
+    <button id="btn-stop" title="Stop the running program" disabled>&#9632; Stop</button>
+    <button id="btn-speed" title="Toggle animation speed">1&times;</button>
+    <button id="btn-zoom" title="Cycle zoom: fit / 1:1 / 2x">fit</button>
+    <button id="btn-grid" title="Toggle grid / axes overlay">grid</button>
+    <button id="btn-png" title="Export the canvas as PNG">PNG</button>
+    <button id="btn-examples" title="Load a starter example">Examples</button>
+    <span class="sep"></span>
+    <button id="btn-new">New</button>
+    <button id="btn-open">Open</button>
+    <button id="btn-save">Save</button>
+    <button id="btn-save-all" title="Save every tab as its own plain file in one folder">Save all</button>
+    <!-- release build: exam start button hidden; the exam subsystem is still
+         reachable on restart via exam_status, or by re-adding this button -->
+    <span class="spacer"></span>
+    <span id="status">ready</span>
+  </div>
+  <div id="exam-banner" hidden>
+    <span id="exam-name"></span>
+    <span id="exam-timer"></span>
+    <button id="btn-exam-end">End exam</button>
+  </div>
+  <div id="modal" hidden>
+    <div id="modal-box">
+      <h3 id="modal-title"></h3>
+      <div id="modal-body"></div>
+      <div id="modal-actions"></div>
+    </div>
+  </div>
+  <div id="main">
+    <div id="left">
+      <div id="tabs"></div>
+      <textarea id="editor"></textarea>
+    </div>
+    <div id="splitter" title="Drag to resize"></div>
+    <div id="right">
+      <div id="canvas-wrap">
+        <canvas id="screen" width="640" height="480" tabindex="0"></canvas>
+      </div>
+      <div id="readout">
+        <span id="px-readout">—</span>
+      </div>
+      <div id="console"></div>
+    </div>
+  </div>
+  <script src="vendor/codemirror.min.js"></script>
+  <script src="vendor/clike.min.js"></script>
+  <script src="vendor/show-hint.min.js"></script>
+  <script src="api-ref.js"></script>
+  <script src="player.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>

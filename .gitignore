@@ -1,0 +1,7 @@
+# heavy build inputs / outputs — not part of source
+/emsdk/
+/dist/
+/src-tauri/target/
+/node_modules/
+*.wasm
+/out/
